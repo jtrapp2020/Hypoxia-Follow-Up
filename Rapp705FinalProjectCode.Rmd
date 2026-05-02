@@ -1,0 +1,643 @@
+---
+output: 
+  word_document:
+    reference_docx: "reference_style.docx"
+---
+
+######## Analysis Report
+######## Rapp, Jackson
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+
+# Load necessary libraries here
+library(tidyverse)
+library(janitor)          # Used for data cleaning
+library(patchwork)        # Used for plot layouts
+library(car)              # Used for Model Diagnositcis (CR Plots), and VIF calculations
+library(gtsummary)        # Used for Table Output
+library(flextable)        # Used for Table Output
+
+# Load the dataset
+load("hypoxia.Rdata")
+```
+
+# Study Overview / Introduction
+
+## Background / Study Population
+
+This report continues previous analyses examining the relationship between hypoxia and intraoperative mean arterial pressure. While prior work quantified the association between the percentage of sleep time with SaO2 < 90% and the time-weighted average of mean arterial pressure (TWA MAP), this study builds on those findings by shifting the primary exposure to the minimum nocturnal SaO2. Using the same retrospective Cleveland Clinic dataset of 281 adult patients with obstructive sleep apnea (OSA) who underwent laparoscopic bariatric procedures, this analysis seeks to clarify further the predictive relationship between OSA severity metrics and cardiovascular morbidity.
+
+## Study Aims / Objectives
+
+Primary Analysis: The primary objective is to quantify the association between minimum nocturnal SaO2 and intraoperative TWA MAP among patients with OSA undergoing laparoscopic bariatric surgery. To isolate this effect, the analysis will adjust for a comprehensive set of pre-specified clinical confounders known to affect cardiovascular morbidity.
+
+<br>
+
+Secondary Analysis: The secondary objective is to model the relationship between minimum nocturnal SaO2 and the intraoperative administration of vasopressors, adjusting for the same confounding variables. Furthermore, this analysis will evaluate whether a patient's diabetes status modifies the effect of minimum nocturnal SaO2 on the likelihood of requiring vasopressor support.
+
+# Statistical Methods
+
+## Descriptive Statistics
+
+Comprehensive baseline demographic and clinical characteristics of the Cleveland Clinic cohort were documented in the previous analysis report. Because that initial summary did not include the new variables of interest, a focused descriptive table will be provided to summarize the specific exposure and outcomes for this study. Symmetrically distributed continuous variables, such as intraoperative TWA MAP, will be summarized using means and standard deviations (SD). Skewed continuous variables, specifically minimum nocturnal SaO2, will be reported using medians and interquartile ranges (IQR). Finally, the binary outcome of intraoperative vasopressor use will be summarized using frequencies and percentages.
+
+## Analysis Plan for Aim 1
+
+To quantify the association between minimum nocturnal SaO2 and intraoperative TWA MAP, we will build a multivariable linear regression model adjusting for the pre-specified clinical confounders. To ensure the validity of our estimates, we will run a series of diagnostic tests to evaluate the assumptions of linearity, normality, and homoscedasticity. Linearity will be assessed via Component+Residual (CR) plots for continuous predictors (minimum nocturnal SaO2, age, BMI). If the linearity assumption is severely violated for a predictor, a restricted cubic spline will be fit, and a Likelihood Ratio Test ($\alpha = 0.05$) will be used to determine if the non-linear term provides a statistically significant improvement in model fit. The assumption of normally distributed residuals will be evaluated by examining a Q-Q plot, and homoscedasticity will be assessed via a residuals versus fitted values plot. Should severe violations of normality or homoscedasticity occur, a bootstrapped regression will be employed to generate robust p-values and confidence intervals.
+
+After the model structure is finalized, we will evaluate the model for collinearity using Generalized Variance Inflation Factors (GVIF). The threshold for collinearity for the scaled GVIF will be set to 1.6. Furthermore, we will search for outliers and influential observations by inspecting studentized residuals, leverage, and Cook's distance, utilizing a Cook’s D threshold of 0.5 to flag high influence. A sensitivity analysis will be conducted to determine how susceptible our coefficients are to extreme values by removing identified influential points from the dataset. Finally, to determine if minimum nocturnal SaO2 is independently associated with TWA MAP, the statistical significance of its coefficient will be evaluated using a Bonferroni-corrected threshold of $\alpha = 0.025$.
+
+## Analysis Plan for Aim 2
+
+To address the secondary objective, a multivariable logistic regression model will be constructed to quantify the association between minimum nocturnal SaO2 and the intraoperative administration of vasopressors, adjusting for the same pre-specified clinical confounders utilized in the primary analysis. Furthermore, to evaluate potential effect modification, an interaction term between minimum nocturnal SaO2 and diabetes diagnosis will be incorporated into the model. The statistical significance of this interaction will be formally assessed.
+
+To ensure the validity of the logistic model, the assumption of linearity between the continuous predictors and the log-odds of the outcome will be evaluated using smoothed CR plots on the logit scale. A violation of this assumption for a continuous predictor will lead to the inclusion of a restricted cubic spline. Additionally, diagnostic checks for outliers and influential observations will be conducted by examining studentized deviance residuals, leverage, and Cook’s Distance. Finally, the primary effect estimates will be reported as odds ratios with corresponding Bonferroni-corrected 97.5% confidence intervals. Consistent with the primary analysis, all statistical significance for this secondary aim will be evaluated against a threshold of $\alpha = 0.025$.
+
+## Missing Data
+
+Similar to the previous analysis, this study relies on retrospective electronic medical records. Therefore, missingness is unlikely to be informative regarding minimum nocturnal SaO2 values, intraoperative vasopressor use, or other clinical covariates. To handle missing data, list-wise deletion was utilized. Patients missing values for the primary exposure, primary or secondary outcomes, or any of the pre-specified clinical confounders were excluded from the cohort. This approach yielded a final, complete dataset of 281 observations for all multivariable linear and logistic regression analyses.
+
+# Results
+
+```{r Data Cleaning, include=FALSE}
+# This Chunk will not print, but is useful for data cleaning,
+# checking for missingness, building models, and diagnostic checks
+# Select necessary variables for analysis + pre-specified confounders
+my_vars <- c("Min Sao2",                  # Continuous (0 to 100 %)
+             "TWA MAP",                   # Continuous
+             "Age",                       # Discrete (Countably Infinite)
+             "Female",                    # Discrete (Nominal)
+             "Race",                      # Discrete (Nominal)
+             "BMI",                       # Continuous
+             "Smoking",                   # Discrete (Nominal)
+             "Diabetes",                  # Discrete (Nominal)
+             "Hyper",                     # Discrete (Nominal)
+             "CAD",                       # Discrete (Nominal)
+             "Preop AntiHyper Med",       # Discrete (Nominal)
+             "CPAP",                      # Discrete (Nominal)
+             "Type Surg",                 # Discrete (Nominal)
+             "Vasopressor"                # Discrete (Nominal)
+             )
+
+# Create primary data set
+data <- hypoxia %>% 
+  select(all_of(my_vars))
+
+# Clean all column names in dataset at once
+data <- data %>%
+  clean_names()
+
+# Spot Check for extreme values (Should be safe according to the Dataset Introduction)
+summary(data)
+
+#Check for Missingness
+colSums(is.na(data))
+
+# Quick grid of histograms for all numeric variables to determine whether I should report means or medians in my Table one
+data %>%
+  # Select only the continuous/numeric variables
+  select(age, bmi, min_sao2, twa_map) %>%
+  # Reshape the data so ggplot can plot them all at once
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  
+  # Build the histogram plot
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  
+  # Create a separate panel for each variable and allow the x-axis to adjust freely
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Quick Distribution Check for Continuous Variables", x = NULL, y = "Count")
+
+# Report Means for age, twa_map, and bmi; median for min_sao2
+
+# Fit the multiple linear regression model (Aim 1)
+model_linear <- lm(twa_map ~ min_sao2 + age + female + factor(race) + bmi +
+                     smoking + diabetes + hyper + cad + preop_anti_hyper_med +
+                     cpap + factor(type_surg),
+                   data = data)
+
+# Extract results for partial F-test
+summary(model_linear)
+
+# Extract 97.5% CI
+confint(model_linear, parm = "min_sao2", level = 0.975)
+
+# Calculate GVIF for the multiple linear regression model
+model_vifs <- car::vif(model_linear)
+
+# Print the results to the console
+print(model_vifs)
+# GVIF scores were below 1.6
+
+## Sens Analysis
+# Create a new dataset without Observation 280
+data_sens <- data[-280, ]
+
+# Fit the sensitivity model with the exact same predictors
+model_sens <- lm(twa_map ~ min_sao2 + age + female + factor(race) + bmi +
+                   smoking + diabetes + hyper + cad + preop_anti_hyper_med +
+                   cpap + factor(type_surg),
+                 data = data_sens)
+
+summary(model_sens)
+
+# Compare the coefficients side-by-side
+car::compareCoefs(model_linear, model_sens)
+
+# Fit the logistic regression model (Aim 2.1)
+model_logistic <- glm(
+  formula = vasopressor ~ min_sao2 + age + female + factor(race) + bmi +
+                   smoking + diabetes + hyper + cad + preop_anti_hyper_med +
+                   cpap + factor(type_surg), 
+  family = "binomial",
+  data = data
+)
+
+summary(model_logistic)
+
+# Calculate GVIF for the multiple logistic regression model
+log_model_vifs <- car::vif(model_logistic)
+print(log_model_vifs)
+# GVIF scores were below 1.6 and were reasonable
+
+# Print the results to the console
+print(log_model_vifs)
+
+# Fit the logistic regression model with interaction terms (Aim 2.2)
+model_logistic_int <- glm(
+  formula = vasopressor ~ min_sao2 * diabetes + age + female + factor(race) + bmi +
+                   smoking + hyper + cad + preop_anti_hyper_med +
+                   cpap + factor(type_surg), 
+  family = "binomial",
+  data = data
+)
+
+summary(model_logistic_int)
+```
+
+## Table 1: Descriptive Statistics of Primary Study Variables
+
+```{r}
+# Select strictly the primary variables for this condensed table
+table1_data <- data %>%
+  select(min_sao2, twa_map, vasopressor, diabetes)
+
+# Build the statistical summary
+summary_tbl <- table1_data %>%
+  tbl_summary(
+    label = list(
+      min_sao2 ~ "Minimum Nocturnal SaO2 (%)",
+      twa_map ~ "TWA MAP during Surgery (mmHg)",
+      vasopressor ~ "Intraoperative Vasopressor Use",
+      diabetes ~ "Diabetes Diagnosis"
+    ),
+    # Map the exact descriptive statistics
+    statistic = list(
+      min_sao2 ~ "{median} [{p25}, {p75}]", # Median and IQR
+      twa_map ~ "{mean} ({sd})",            # Mean and SD
+      vasopressor ~ "{n} ({p}%)",           # Count and Percentage
+      diabetes ~ "{n} ({p}%)"               # Count and Percentage
+    ),
+    digits = all_continuous() ~ 1,          # Round continuous variables to 1 decimal
+    missing = "no"                          # Hides the missing data row if data is clean
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  bold_labels()
+
+# Convert to flextable
+table1_flex <- summary_tbl %>%
+  as_flex_table() %>%
+  autofit() %>% 
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 11, part = "all") %>%
+  set_caption(caption = "Descriptive Statistics of Primary Study Variables")
+
+# Print the table
+table1_flex
+```
+
+The baseline demographic and clinical characteristics of the 281-patient cohort remain identical to those detailed in the previous analysis report. Briefly, the cohort is predominantly female (72%) and Caucasian (77%), with a mean age of 47 years. Table 1 outlines the primary variables of interest for this current study. The primary exposure, minimum nocturnal SaO2, had a median of 82% [IQR: 74, 86]. Meanwhile, the primary outcome, intraoperative TWA MAP, had a mean value of 89.0 (SD: 11.0) mmHg. Additionally, 153 (54.4%) patients required an intraoperative vasopressor, and 97 (34.5%) patients had a diagnosis of diabetes.
+
+## Figure 1: Linearity Diagnostics (Primary)
+
+```{r CR-Plot, fig.width=6.5, fig.height=4.5, dpi=300, echo=FALSE, warning=FALSE, message=FALSE}
+# Extract the partial residuals (Component + Residual) directly from the model
+partial_resids <- as.data.frame(residuals(model_linear, type = "partial"))
+
+# Bind them to original continuous predictors
+cr_data <- data %>%
+  select(min_sao2, age, bmi) %>%
+  bind_cols(
+    pr_min_sao2 = partial_resids$min_sao2,
+    pr_age = partial_resids$age,
+    pr_bmi = partial_resids$bmi
+  )
+
+# Create a helper function to build a uniform plot for each variable
+build_cr_plot <- function(df, x_var, y_var, x_label) {
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    geom_point(shape = 21, fill = "gray90", color = "black", alpha = 0.6) + 
+    geom_smooth(method = "lm", color = "blue", linetype = "dashed", se = FALSE) + 
+    geom_smooth(method = "loess", color = "deeppink", se = FALSE) + 
+    labs(x = x_label, y = "TWA MAP (mmHg)") +
+    
+    theme_classic() + 
+    theme(
+      text = element_text(size = 12),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "black")
+    )
+}
+
+# Generate the individual plots
+p_sao2 <- build_cr_plot(cr_data, "min_sao2", "pr_min_sao2", "Minimum Nocturnal SaO2 (%)")
+p_age  <- build_cr_plot(cr_data, "age", "pr_age", "Age (years)")
+p_bmi  <- build_cr_plot(cr_data, "bmi", "pr_bmi", "BMI (kg/m²)")
+
+# Arrange the plots using patchwork
+final_cr_figure <- (p_sao2 | p_age) / (p_bmi | plot_spacer()) +
+  plot_annotation(
+    title = "Component + Residual Plots for Continuous Covariates",
+    theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+  )
+
+print(final_cr_figure)
+```
+
+Upon visual assessment of the CR plots (Figure 1), no gross violations of the linearity assumption were detected for the continuous predictors in the multivariable model. Minor deviations between the linear fit and the loess smoothed line were observed in the lower tails of both minimum nocturnal SaO2 and age. However, these deviations occurred in regions where the data was exceedingly sparse, causing the smoothed fit to be highly sensitive to a few extreme observations. Across the core density of the data, the linear and smoothed fits aligned almost perfectly. Consequently, incorporating restricted cubic splines for these variables would introduce an unnecessary risk of overfitting to the the tails. A linear term was deemed sufficient and appropriate for all continuous covariates, and the assumption of linearity was met.
+
+## Figure 2: Constant Variance Diagnostics (Primary)
+
+```{r resid-plot, echo=FALSE, fig.height=4.6, fig.width=6.6, dpi=300, out.width="65%"}
+# Extract fitted values and studentized residuals from model
+diag_data <- data.frame(
+  fitted_vals = fitted(model_linear),
+  stud_resids = rstudent(model_linear)
+)
+
+# Build the plot
+p_hetero <- ggplot(diag_data, aes(x = fitted_vals, y = stud_resids)) +
+  geom_point(shape = 21, fill = "gray90", color = "black", alpha = 0.6) +
+  # Add a reference line at zero
+  geom_hline(yintercept = 0, color = "blue", linetype = "dashed", size = 1) +
+  # Add a smoothed line to check for overall trends
+  geom_smooth(method = "loess", color = "deeppink", se = FALSE) +
+  labs(
+    title = "Residuals vs. Fitted Values",
+    x = "Fitted Values (TWA MAP)",
+    y = "Studentized Residuals"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+print(p_hetero)
+```
+
+Upon visual inspection of the residuals versus fitted values plot (Figure 2), no gross violations of homoscedasticity were observed. The studentized residuals formed a random spread around the horizontal axis with no evident cone or fan-shaped patterns. Furthermore, the smoothed trend line remained flat and centered near zero, indicating that the variance of the residuals was consistent across all fitted values of TWA MAP. Therefore, the assumption of constant variance was met.
+
+## Figure 3: Normality Diagnostics (Primary)
+
+```{r qq-plot, echo=FALSE, fig.height=4.6, fig.width=6.6, dpi=300, out.width="65%"}
+# Build the Q-Q plot
+p_qq <- ggplot(diag_data, aes(sample = stud_resids)) +
+  # plot the actual sample quantiles against theoretical normal quantiles
+  stat_qq(shape = 21, fill = "gray90", color = "black", alpha = 0.6, size = 2) +
+  # adds the reference line of perfect normality
+  stat_qq_line(color = "blue", linetype = "dashed", size = 1) +
+  labs(
+    title = "Normal Q-Q Plot of Residuals",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles (Studentized Residuals)"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+print(p_qq)
+```
+
+Visual inspection of the Q-Q plot (Figure 3) revealed no severe departures from normality. The studentized residuals closely tracked the theoretical normal reference line throughout the core of the distribution. Minor deviations were observed at the extreme tails, most notably a slight upward curve in the upper quantiles, indicating a mild right skew in the residual distribution. However, because the vast majority of the residuals align perfectly with the reference line and the sample size is sufficiently large (n = 281), the model's parameter estimates remain robust. Consequently, the assumption of normally distributed residuals was met without the need for bootstrapped confidence intervals.
+
+## Figure 4: Diagnostics for influence, Cook's Distance, and Collinearity (Primary)
+
+```{r outlier-plots, fig.width=7.26, fig.height=3, dpi=300, echo=FALSE, warning=FALSE, message=FALSE}
+# Extract leverage and residuals from model
+diag_data <- data.frame(
+  leverage = hatvalues(model_linear),
+  stud_resids = rstudent(model_linear),
+  obs_num = seq_len(nobs(model_linear)) # Creates an index for labeling
+)
+
+# Calculate the theoretical leverage threshold (2 * k / n)
+# k = number of parameters (including intercept), n = sample size
+k <- length(coef(model_linear)) 
+n <- nobs(model_linear)         
+leverage_threshold <- 2 * (k / n)
+
+# Create a conditional label column (only labels outliers/high leverage points)
+diag_data <- diag_data %>%
+  mutate(label = ifelse(abs(stud_resids) > 2 | leverage > leverage_threshold, 
+                        as.character(obs_num), 
+                        ""))
+
+# Build the plot
+p_leverage <- ggplot(diag_data, aes(x = leverage, y = stud_resids)) +
+  geom_point(shape = 21, fill = "gray90", color = "black", alpha = 0.6, size = 2) +
+  
+  # Horizontal reference lines for studentized residuals at +/- 2
+  geom_hline(yintercept = c(-2, 2), color = "red", linetype = "dashed", linewidth = 0.8) +
+  
+  # Vertical reference line for high leverage threshold
+  geom_vline(xintercept = leverage_threshold, color = "darkorange", linetype = "dashed", linewidth = 0.8) +
+  
+  # Add text labels strictly for the points of interest to avoid clutter
+  geom_text(aes(label = label), vjust = -0.8, size = 3.5, color = "black") +
+  
+  labs(
+    title = "Leverage vs. Studentized Residuals",
+    x = "Leverage (Hat Values)",
+    y = "Studentized Residuals"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 10),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+# Extract Cook's Distance and observation numbers
+n <- nobs(model_linear)
+cooks_threshold_4n <- 4 / n
+
+diag_data_cooks <- data.frame(
+  cooks_d = cooks.distance(model_linear),
+  obs_num = seq_len(n)
+)
+
+# Identify the top 5 highest Cook's D values for labeling
+top_5_obs <- diag_data_cooks %>%
+  arrange(desc(cooks_d)) %>%
+  slice(1:5) %>%
+  pull(obs_num)
+
+# Add a label column that only contains text for the top 5 points
+diag_data_cooks <- diag_data_cooks %>%
+  mutate(label = ifelse(obs_num %in% top_5_obs, as.character(obs_num), ""))
+
+# Build the needle plot
+p_cooks_q4 <- ggplot(diag_data_cooks, aes(x = obs_num, y = cooks_d)) +
+  # Create the vertical "needles" (matches type = "h" in base R)
+  geom_segment(aes(xend = obs_num, yend = 0), color = "steelblue", alpha = 0.7, linewidth = 0.8) +
+  # Add the solid dots on top (matches pch = 16)
+  geom_point(color = "steelblue", size = 1) +
+  
+  # Add three reference lines
+  geom_hline(yintercept = 0.5, color = "red", linetype = "dashed", linewidth = 1) +
+  geom_hline(yintercept = 0.1, color = "darkorange", linetype = "dashed", linewidth = 1) +
+  geom_hline(yintercept = cooks_threshold_4n, color = "forestgreen", linetype = "dashed", linewidth = 1) +
+  
+  # Label the top 5 most influential points
+  geom_text(aes(label = label), vjust = -0.8, size = 3.5, color = "black") +
+  
+  labs(
+    title = "Cook's Distance by Observation Number",
+    x = "Observation Number",
+    y = "Cook's Distance"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 10),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+# Arrange the plots using patchwork
+final_outlier <- (p_leverage | p_cooks_q4) +
+  plot_annotation(
+    title = "Diagnostic Plots for Influential Points",
+    theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+  )
+
+print(final_outlier)
+```
+
+Diagnostic plots were utilized to identify potentially influential observations within the dataset. Visual inspection of the leverage versus studentized residuals plot revealed that observation 280 was an outlier in both the predictor space (exceeding the theoretical leverage threshold) and the outcome space (studentized residual > 2). Consequently, observation 280 exhibited the highest relative influence on the model, as confirmed by the Cook’s Distance plot. However, its absolute Cook’s Distance value remained well below the standard threshold for severe global influence (Cook’s D > 0.5). While the diagnostics indicate that no single observation exerted an undue influence on the overall model fit, a sensitivity analysis excluding observation 280 will be conducted to ensure the absolute robustness of the final parameter estimates.
+
+Additionally, Generalized Variance Inflation Factors (GVIF) were calculated to assess the model for collinearity. Because the model contained categorical variables with multiple degrees of freedom, the scaled GVIF was utilized to evaluate all covariates on a standard metric. None of the covariates exceeded the pre-specified threshold of 1.6, with the highest observed scaled score being 1.19. As a result, no problematic multicollinearity was detected among the predictors. Having verified that all model assumptions and diagnostic considerations were adequately met, we proceeded with the interpretation of the multivariable linear model.
+
+
+## Results from Primary Analysis (Partial F-Test)
+
+In the primary analysis, the multivariable linear regression model revealed a statistically significant association between minimum nocturnal SaO2 and intraoperative TWA MAP ($p = 0.019$). Holding all pre-specified confounders constant, every 1% absolute increase in minimum nocturnal SaO2 was associated with a 0.16 mmHg increase in intraoperative TWA MAP (97.5% CI: 0.007 to 0.318).
+
+Our findings directly contrast with the original conclusions by Turan et al., who did not find a statistically significant relationship at the $\alpha = 0.025$ threshold ($p = 0.04$). This discrepancy is driven by our different modeling methodologies. Turan et al. utilized an automated backward selection procedure (alpha-to-stay = 0.20) to eliminate covariates. By dropping clinically relevant confounders that failed to meet a strict statistical threshold, their model likely suffered from omitted variable bias. In contrast, our full model included all pre-specified confounders based on clinical relevance. While this approach risks increasing the variance of the estimates due to the bias-variance trade-off, our GVIF analysis confirmed that multicollinearity was negligible. Therefore, by properly controlling for confounding variables rather than relying on automated stepwise selection, our full multivariable model is the preferred method and provides a more accurate, unbiased estimate of the true association.
+
+## Results from Sensitivity Analysis (Omission of Observation 280)
+
+To ensure the robustness of our findings, a sensitivity analysis was conducted to determine if the primary parameter estimates were influenced by extreme values. As observation 280 was identified as the point of highest relative influence during our diagnostic testing, it was excluded from the dataset, and the multivariable linear regression model was refitted. Following the removal of this observation, the estimated coefficient for minimum nocturnal SaO2 shifted marginally from 0.162 to 0.159, representing a negligible decrease of approximately 1.85%. Because this primary effect estimate remained highly stable, we conclude that the model is not susceptible to this specific extreme value and the original parameter estimates are robust.
+
+## Figure 5: Linearity Diagnostics (Secondary)
+
+```{r CR-Plot-log, fig.width=6.5, fig.height=4.5, dpi=300, echo=FALSE, warning=FALSE, message=FALSE}
+# Extract the partial residuals from the logistic model
+partial_resids_logit <- as.data.frame(residuals(model_logistic, type = "partial"))
+
+# Bind them to continuous predictors
+cr_data_logit <- data %>%
+  select(min_sao2, age, bmi) %>%
+  bind_cols(
+    pr_min_sao2 = partial_resids_logit$min_sao2,
+    pr_age = partial_resids_logit$age,
+    pr_bmi = partial_resids_logit$bmi
+  )
+
+# Create the helper function
+build_cr_plot_logit <- function(df, x_var, y_var, x_label) {
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    geom_point(shape = 21, fill = "gray90", color = "black", alpha = 0.6) + 
+    geom_smooth(method = "lm", color = "blue", linetype = "dashed", se = FALSE) + 
+    geom_smooth(method = "loess", color = "deeppink", se = FALSE) + 
+    labs(x = x_label, y = "Logit of Vasopressor") +
+    
+    theme_classic() + 
+    theme(
+      text = element_text(size = 12),
+      axis.title = element_text(face = "bold"),
+      axis.text = element_text(color = "black")
+    )
+}
+
+# Generate the individual plots
+p_sao2_log <- build_cr_plot_logit(cr_data_logit, "min_sao2", "pr_min_sao2", "Minimum Nocturnal SaO2 (%)")
+p_age_log  <- build_cr_plot_logit(cr_data_logit, "age", "pr_age", "Age (years)")
+p_bmi_log  <- build_cr_plot_logit(cr_data_logit, "bmi", "pr_bmi", "BMI (kg/m²)")
+
+# Arrange the plots using patchwork
+final_cr_figure_logit <- (p_sao2_log | p_age_log) / (p_bmi_log | plot_spacer()) +
+  plot_annotation(
+    title = "Component + Residual Plots (Logistic Model)",
+    theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+  )
+
+print(final_cr_figure_logit)
+```
+
+Upon visual assessment of the Component+Residual (CR) plots (Figure 5), no gross violations of the linearity assumption were detected between the continuous predictors and the log-odds of intraoperative vasopressor use. While minor deviations between the proposed linear fit and the loess smoothed line were observed at the extreme tails of minimum nocturnal SaO2, these departures occurred in regions of high data sparsity, rendering the smoothed fit highly sensitive to a few observations. Meanwhile, the smoothed trend lines for Age and BMI closely tracked their respective linear fits across the core density of the data. Consequently, incorporating restricted cubic splines for these variables would introduce an unnecessary risk of overfitting to the noise in the tails. A linear term was deemed sufficient and appropriate for all continuous covariates, and the assumption of linearity on the logit scale was met.
+
+## Figure 6: Diagnostics for influence, Cook's Distance, and Collinearity (Secondary)
+
+```{r outlier-plots-log, fig.width=7.26, fig.height=3, dpi=300, echo=FALSE, warning=FALSE, message=FALSE}
+# Calculate the theoretical leverage threshold (2 * k / n) for the logistic model
+k_log <- length(coef(model_logistic)) 
+n_log <- nobs(model_logistic)         
+leverage_threshold_log <- 2 * (k_log / n_log)
+
+# Extract studentized deviance residuals, hat values (leverage), and observation numbers
+diag_data_logit <- data.frame(
+  stud_dev_resids = rstudent(model_logistic),
+  leverage = hatvalues(model_logistic),
+  obs_num = seq_len(n_log)
+)
+
+# Label points that exceed the residual threshold (+/- 2) OR the leverage threshold
+diag_data_logit <- diag_data_logit %>%
+  mutate(label = ifelse(abs(stud_dev_resids) >= 2 | leverage > leverage_threshold_log, 
+                        as.character(obs_num), 
+                        ""))
+
+# Build the plot
+p_dev_resids_leverage <- ggplot(diag_data_logit, aes(x = leverage, y = stud_dev_resids)) +
+  geom_point(shape = 21, fill = "gray90", color = "black", alpha = 0.6, size = 2) +
+  
+  # Standard outcome outlier thresholds (+/- 2)
+  geom_hline(yintercept = c(-2, 2), color = "red", linetype = "dashed", linewidth = 0.8) +
+  
+  # Vertical reference line for high leverage threshold
+  geom_vline(xintercept = leverage_threshold_log, color = "darkorange", linetype = "dashed", linewidth = 0.8) +
+  
+  # Add labels for extreme points to avoid clutter
+  geom_text(aes(label = label), vjust = -0.8, size = 3.5, color = "black") +
+  
+  labs(
+    title = "Leverage vs. Deviance Residuals",
+    x = "Leverage (Hat Values)",
+    y = "Studentized Deviance Residuals"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 10),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+# Extract Cook's Distance and observation numbers
+n_log <- nobs(model_logistic)
+cooks_threshold_4n_log <- 4 / n_log
+
+diag_data_cooks_log <- data.frame(
+  cooks_d = cooks.distance(model_logistic),
+  obs_num = seq_len(n_log)
+)
+
+# Identify the top 5 highest Cook's D values
+top_5_obs_log <- diag_data_cooks_log %>%
+  arrange(desc(cooks_d)) %>%
+  slice(1:5) %>%
+  pull(obs_num)
+
+# Add a label column
+diag_data_cooks_log <- diag_data_cooks_log %>%
+  mutate(label = ifelse(obs_num %in% top_5_obs_log, as.character(obs_num), ""))
+
+# Build the publication-ready needle plot
+p_cooks_log <- ggplot(diag_data_cooks_log, aes(x = obs_num, y = cooks_d)) +
+  geom_segment(aes(xend = obs_num, yend = 0), color = "steelblue", alpha = 0.7, linewidth = 0.8) +
+  geom_point(color = "steelblue", size = 2) +
+  
+  # Standard reference lines
+  geom_hline(yintercept = 0.5, color = "red", linetype = "dashed", linewidth = 1) +
+  geom_hline(yintercept = 0.1, color = "darkorange", linetype = "dashed", linewidth = 1) +
+  geom_hline(yintercept = cooks_threshold_4n_log, color = "forestgreen", linetype = "dashed", linewidth = 1) +
+  
+  geom_text(aes(label = label), vjust = -0.8, size = 3.5, color = "black") +
+  
+  labs(
+    title = "Cook's Distance by Observation",
+    x = "Observation Number",
+    y = "Cook's Distance"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 10),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+# Arrange the plots using patchwork
+final_outlier <- (p_dev_resids_leverage | p_cooks_log) +
+  plot_annotation(
+    title = "Diagnostic Plots for Influential Points",
+    theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+  )
+
+print(final_outlier)
+```
+
+Diagnostic plots were utilized to identify potentially influential observations within the dataset. Visual inspection of the leverage versus studentized deviance residuals plot revealed that the dataset was generally free from highly influential points. While observation 236 exhibited extreme leverage in the predictor space, its studentized deviance residual was near zero, indicating that its covariate pattern aligned with the model's predictions. Meanwhile, observations 123 and 197 approached the standard outlier threshold in the outcome space (studentized deviance residual $\approx$ 2) but did not exhibit concerning leverage. An analysis of the Cook’s Distance plot confirmed that no single observation exerted severe global influence on the model fit, as all scores remained strictly below 0.1, which is well under the threshold for severe influence (Cook’s D > 0.5).
+
+Additionally, Generalized Variance Inflation Factors (GVIF) were calculated to assess the model for multicollinearity. None of the covariates exceeded the pre-specified scaled threshold of 1.6, with the highest observed scaled score being 1.17. As a result, no problematic multicollinearity was detected among the predictors. Having verified that all model assumptions and diagnostic considerations were adequately met, we proceeded with the interpretation of the logistic model.
+
+## Results from Secondary Analysis (Wald Test)
+
+In the secondary analysis, the multivariable logistic regression model revealed that the association between minimum nocturnal SaO2 and the intraoperative administration of vasopressors was not statistically significant ($p = 0.494$). Holding all pre-specified confounders constant, the estimated odds ratio of receiving a vasopressor was 0.99 (97.5% CI: 0.964 to 1.018) for each 1% absolute increase in minimum nocturnal SaO2.
+
+Furthermore, the interaction between minimum nocturnal SaO2 and diabetes status was not statistically significant based on the pre-specified Bonferroni-corrected threshold ($p = 0.040$). The estimated interaction coefficient suggested that for every 1% increase in minimum nocturnal SaO2, the odds of requiring a vasopressor increase by a factor of 1.05 (97.5% CI: 0.932 to 1.002) for diabetic patients compared to non-diabetic patients. However, because this result failed to meet the strict significance criteria ($\alpha = 0.025$), we cannot definitively conclude that diabetes modifies the relationship between nocturnal hypoxia and intraoperative vasopressor requirements.
+
+# Discussion
+
+## Main Takeaways
+
+This study aimed to expand upon previous analyses of OSA and cardiovascular morbidity by evaluating the association between minimum nocturnal SaO2 and intraoperative TWA MAP among patients undergoing laparoscopic bariatric surgery. Using a rigorously evaluated multivariable linear regression model, we identified a statistically significant, positive relationship between minimum nocturnal SaO2 and TWA MAP; specifically, lower minimum nocturnal SaO2 levels were predictive of lower intraoperative arterial pressure. Notably, these results diverge from the original findings of Turan et al., whose reliance on automated backward selection likely omitted clinically relevant confounders. While incorporating a comprehensive set of confounders highlights the bias-variance trade-off, our diagnostic assessments confirmed minimal multicollinearity, indicating that our full model provides a more accurate and unbiased representation of this relationship.
+
+In our secondary analysis, we sought to determine if minimum nocturnal SaO2 was predictive of the intraoperative administration of vasopressors. The logistic regression model revealed no statistically significant independent association between the primary predictor and this clinical outcome. Furthermore, the inclusion of an interaction term indicated a potential clinical trend that suggested diabetic patients experiencing severe nocturnal hypoxia might face higher odds of requiring vasopressor support compared to their non-diabetic counterparts. However, this effect modification did not reach formal statistical significance. Consequently, further research is required to determine if this conditional association is clinically meaningful.
+## Limitations
+
+A primary limitation of this study comes from the handling of missing data. Because we inherited a dataset processed by Turan et al., we were restricted to complete-case analysis via list-wise deletion. Consequently, approximately 16% of the eligible patient cohort was excluded prior to our analysis. Because it is difficult to guarantee that these electronic medical records were Missing Completely At Random (MCAR), this exclusion introduces the risk of selection bias. In future research, it would be optimal to utilize the raw dataset and employ multiple imputation techniques to account for missingness.
+
+## Future Research Directions
+
+To build upon these findings, future research should explore models utilizing alternative cardiovascular outcomes and varied metrics of OSA severity. Specifically, longitudinal studies tracking the long-term cardiovascular morbidity of OSA could provide deeper insights by employing metrics that more effectively capture the chronic, recurrent burden of the disease. Finally, subsequent investigations should further illuminate the potential effect modification of diabetes on minimum nocturnal SaO2 by utilizing a larger dataset adequately powered to definitively test this interaction.
+
+## Collaboration Questions
+
+Given the opportunity to collaborate with the original clinical investigators, my primary questions would be about their variable selection process I would seek their clinical rationale for subjecting a list of pre-specified, clinically relevant confounders to an automated backward selection process. If these covariates were known through prior literature to influence both OSA severity and cardiovascular morbidity, allowing a p-value threshold to dictate their inclusion risks bias. Additionally, I would ask how they initially determined this specific list of confounders and inquire if recent literature suggests any other unmeasured confounders that we should consider adjusting for in future models.
+
+## Project Reflection
+
+Throughout the latter half of the semester, each module provided one piece of the puzzle for building a multivariable regression model. However, this project was the first time I actually put all of these concepts into practice simultaneously to justify my methodological choices. It was rewarding to see everything fall into place to produce sound statistical inferences. In some respects, I almost wish the data had been slightly less clean so I could have gained more hands-on experience with bootstrapping or variable transformations. Still, completing this project left me feeling prepared to adapt my models if an assumption is grossly violated in the future. While I still find that determining which points are truly influential can feel a bit arbitrary due to my lack of practical experience, working through on this project has definitely given me a stronger grasp of how to identify and handle them.
+
+# References and AI Disclosure Statement
+
+Turan A, You J, Egan C, et al. Relationship between chronic intermittent hypoxia and intraoperative mean arterial pressure in obstructive sleep apnea patients having laparoscopic bariatric surgery. *Anesthesiology*. 2015;122(1):64-71. doi:10.1097/ALN.0000000000000457
+
+<br>
+
+*During the preparation of this work, the author utilized Google Gemini (an artificial intelligence language model) to assist with data analysis and manuscript formatting. Specifically, AI was used to generate and troubleshoot R programming code for data visualization, format statistical outputs, and refine table outputs. After using this tool, the author thoroughly reviewed, edited, and validated all statistical outputs, graphical representations, and clinical interpretations. The author takes full responsibility for the final content and accuracy of this manuscript.*
